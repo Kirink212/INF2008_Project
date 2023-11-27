@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls} from '../threejs/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from '../threejs/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from '../meshopt_decoder/meshopt_decoder.module.js';
 import GUI from '../threejs/examples/jsm/libs/lil-gui.module.min.js';
 import Stats from '../stats/stats.module.js';
 
@@ -31,23 +32,17 @@ let slipperyMaterial, groundMaterial;
 let obstacleBody;
 let obstaclesBodies = [];
 let obstaclesMeshes = [];
-let instancedObstacle;
+// let instancedObstacle;
+let instancedObstacleLow;
+let instancedObstacleHigh;
 const numberOfInstances = 20;
+
 init();
 
 async function init() {
 
   // Scene
 	scene = new THREE.Scene();
-
-  // var lod = new THREE.LOD();
-
-  // // Assuming you have highDetailTree, mediumDetailTree, lowDetailTree as Mesh instances
-  // lod.addLevel(highDetailTree, highDistance); // Set the distance for high detail
-  // lod.addLevel(mediumDetailTree, mediumDistance); // Set the distance for medium detail
-  // lod.addLevel(lowDetailTree, lowDistance); // Set the distance for low detail
-
-  // scene.add(lod); // Add the LOD object to the scene
 
   // Camera
 	camera = new THREE.PerspectiveCamera(
@@ -98,7 +93,7 @@ async function init() {
   await addCube();
 
   addObstacleBody();
-  addObstacle();
+  await addObstacle();
 
   addContactMaterials();
 
@@ -137,6 +132,9 @@ function animate(){
 
   let newMatrix = new THREE.Matrix4();
 
+  let lowIndex = 0;
+  let highIndex = 0;
+  
   for (let i = 0; i < obstaclesBodies.length; i++) {
     let auxQuat = obstaclesBodies[i].quaternion;
     let auxObj = {
@@ -150,19 +148,46 @@ function animate(){
 
     let auxPos = obstaclesBodies[i].position;
 
-    newMatrix.setPosition(auxPos.x, auxPos.y, auxPos.z);
+    const posVector3 = new THREE.Vector3(auxPos.x, auxPos.y, auxPos.z);
+    newMatrix.setPosition(posVector3);
 
-    instancedObstacle.setMatrixAt(i, newMatrix);
+    // se com base na distância for low
+    const cameraPosition = camera.position.clone();
+
+    console.log(i, posVector3.distanceTo(cameraPosition))
+    if (posVector3.distanceTo(cameraPosition) > 30) {
+      instancedObstacleLow.setMatrixAt(lowIndex++, newMatrix);
+    } else {
+      instancedObstacleHigh.setMatrixAt(highIndex++, newMatrix);
+    }
+    // setMatrix 
     
     // obstaclesMeshes[i].position.copy(obstaclesBodies[i].position);
 		// obstaclesMeshes[i].quaternion.copy(obstaclesBodies[i].quaternion);
 	}
 
-  console.log(newMatrix);
+  console.log(lowIndex, highIndex);
 
-  instancedObstacle.instanceMatrix.needsUpdate = true;
-  instancedObstacle.computeBoundingBox();
-  instancedObstacle.computeBoundingSphere();
+  // for do lowindex até o numberOfInstances
+  const zeroMatrix = newMatrix.multiplyScalar(0);
+  for (let i=lowIndex; i<numberOfInstances; i++) {
+    instancedObstacleLow.setMatrixAt(i, zeroMatrix);
+  }
+  // setMatrixAt (lowindex) matriz zero
+
+  // for do highindex até o numberOfInstances
+  for (let i=highIndex; i<numberOfInstances; i++) {
+    instancedObstacleHigh.setMatrixAt(i, zeroMatrix);
+  }
+  // setMatrixAt (highindex) matriz zero
+
+  instancedObstacleLow.instanceMatrix.needsUpdate = true;
+  instancedObstacleLow.computeBoundingBox();
+  instancedObstacleLow.computeBoundingSphere();
+
+  instancedObstacleHigh.instanceMatrix.needsUpdate = true;
+  instancedObstacleHigh.computeBoundingBox();
+  instancedObstacleHigh.computeBoundingSphere();
 
 	requestAnimationFrame(animate);
 
@@ -240,41 +265,45 @@ function addObstacleBody(){
   }
 }
 
-function addObstacle(){
-  // // without instantiation
-  // for (let i = 0; i < 20; i++) {
-  //   let geometry = new THREE.BoxGeometry(2,2,2);
-  //   const texture = new THREE.TextureLoader().load( "src/assets/obstacle.png" );
+function findMeshRecursive(object) {
+  if (object instanceof THREE.Mesh) return object;
 
-  //   let material = new THREE.MeshBasicMaterial({ map: texture});
+  return findMeshRecursive(object.children[0]);
+}
 
-  //   let obstacle = new THREE.Mesh(geometry, material);
-		
-	// 	scene.add(obstacle);
-	// 	obstaclesMeshes.push(obstacle);
-	// }
+async function addObstacle(){
+  const gltfLoader = new GLTFLoader().setPath( 'src/assets/' );
 
-  let geometry = new THREE.BoxGeometry(2,2,2);
-  const texture = new THREE.TextureLoader().load( "src/assets/obstacle.png" );
+  gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 
-  let material = new THREE.MeshBasicMaterial({ map: texture});
+	const barrelLowLoaded = await gltfLoader.loadAsync( 'barrel_low.gltf' );
+  let testGeometry = new THREE.BoxGeometry(2,2,2);
+  let barrelLowGeometry = barrelLowLoaded.scene.children[0].geometry;
+  console.log("LOW GEOMETRY:",barrelLowGeometry);
+  const textureLow = new THREE.TextureLoader().load( "src/assets/barrel_texture.png" );
 
-  instancedObstacle = new THREE.InstancedMesh(geometry, material, numberOfInstances);
+  const barrelHighLoaded = await gltfLoader.loadAsync( 'barrel.gltf' );
+  const barrelHighMesh = findMeshRecursive(barrelHighLoaded.scene);
+  let barrelHighGeometry = barrelHighMesh.geometry;
+  console.log("HIGH GEOMETRY:", barrelHighGeometry);
+  
+  const textureHigh = new THREE.TextureLoader().load( "src/assets/barrel_texture.png" );
+
+  let material = new THREE.MeshBasicMaterial({ map: textureLow });
+  instancedObstacleLow = new THREE.InstancedMesh(testGeometry, material, numberOfInstances);
+
+  material = new THREE.MeshBasicMaterial({ map: textureHigh });
+  instancedObstacleHigh = new THREE.InstancedMesh(barrelHighGeometry, material, numberOfInstances);
   // let obstacle = new THREE.Mesh(geometry, material);
 
   for (let i=0; i < numberOfInstances; i++) {
-    const color = new THREE.Color( 'red' );
-    instancedObstacle.setColorAt(i, color);
+    const color = new THREE.Color( 'white' );
+    instancedObstacleLow.setColorAt(i, color);
+    instancedObstacleHigh.setColorAt(i, color);
   }
 
-  // // with instantiation
-  // for (let i = 0; i < 20; i++) {
-	// 	let obstacleMesh = obstacle.clone();
-	// 	scene.add(obstacleMesh);
-	// 	obstaclesMeshes.push(obstacleMesh);
-	// }
-
-  scene.add(instancedObstacle);
+  scene.add(instancedObstacleLow);
+  scene.add(instancedObstacleHigh);
 }
 
 
